@@ -495,6 +495,8 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
     if (setsockopt(socketFd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(int))) {
         if (LOGS_ENABLED) DEBUG_E("connection(%p) set TCP_NODELAY failed", this);
     }
+    int tos = 0x10; // IPTOS_LOWDELAY - prioritize FastConnect Wi-Fi 7 packet queuing
+    setsockopt(socketFd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
 #ifdef DEBUG_VERSION
     int size = 4 * 1024 * 1024;
     if (setsockopt(socketFd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(int))) {
