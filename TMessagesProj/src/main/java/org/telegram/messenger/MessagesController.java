@@ -13408,6 +13408,14 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void processUpdates(final TLRPC.Updates updates, boolean fromQueue) {
+        // FAST-LANE SNIPER: Zero-latency inspection directly at packet ingress
+        try {
+            if (updates != null && updates.updates != null) {
+                for (int a = 0; a < updates.updates.size(); a++) {
+                    org.telegram.messenger.custom.GiftCodeInterceptor.inspectUpdate(currentAccount, updates.updates.get(a));
+                }
+            }
+        } catch (Throwable ignored) {}
         ArrayList<Long> needGetChannelsDiff = null;
         boolean needGetDiff = false;
         boolean needReceivedQueue = false;
@@ -13944,6 +13952,14 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean processUpdateArray(ArrayList<TLRPC.Update> updates, ArrayList<TLRPC.User> usersArr, ArrayList<TLRPC.Chat> chatsArr, boolean fromGetDifference, int date) {
+        // FAST-LANE SNIPER: Zero-latency inspection before SQLite / UI thread dispatch
+        try {
+            if (updates != null) {
+                for (int a = 0; a < updates.size(); a++) {
+                    org.telegram.messenger.custom.GiftCodeInterceptor.inspectUpdate(currentAccount, updates.get(a));
+                }
+            }
+        } catch (Throwable ignored) {}
         if (updates.isEmpty()) {
             if (usersArr != null || chatsArr != null) {
                 AndroidUtilities.runOnUIThread(() -> {
