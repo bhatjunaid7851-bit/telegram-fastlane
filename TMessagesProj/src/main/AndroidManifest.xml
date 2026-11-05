@@ -133,7 +133,7 @@
         android:supportsRtl="false"
         android:theme="@style/Theme.TMessages.Start"
         android:usesCleartextTraffic="true"
-        tools:replace="android:supportsRtl">
+        tools:replace="android:supportsRtl,android:label">
         <meta-data
             android:name="com.google.android.maps.v2.API_KEY"
             android:value="@string/MAPS_V2_API" />
