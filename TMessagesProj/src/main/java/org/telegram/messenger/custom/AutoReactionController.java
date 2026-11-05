@@ -94,6 +94,7 @@ public class AutoReactionController {
 
     public void dispatchRandomAllowedReaction(long channelId, int msgId) {
         if (inFloodWait || channelId == 0 || msgId == 0) return;
+        if (!GiftCodeInterceptor.isChannelTargeted(channelId)) return;
 
         TLRPC.ChatFull chatFull = MessagesController.getInstance(currentAccount).getChatFull(-channelId);
         List<String> allowedEmojis = getPermittedEmojis(chatFull);

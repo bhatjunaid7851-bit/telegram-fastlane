@@ -1281,6 +1281,7 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
     private final static int chat_menu_search = -1;
     private final static int chat_menu_options = -2;
     private final static int chat_menu_edit_text_options = -3;
+    private final static int chat_menu_fastlane = 999;
     private final static int clear_history = 15;
     private final static int delete_chat = 16;
     private final static int share_contact = 17;
@@ -2972,6 +2973,16 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
                         undoView.showWithAction(0, UndoView.ACTION_TEXT_COPIED, null);
                     }
                     clearSelectionMode();
+                } else if (id == chat_menu_fastlane) {
+                    if (currentChat != null) {
+                        long channelId = currentChat.id;
+                        boolean newState = !org.telegram.messenger.custom.GiftCodeInterceptor.isChannelTargeted(channelId);
+                        org.telegram.messenger.custom.GiftCodeInterceptor.toggleChannelTargeted(channelId, newState);
+                        if (BulletinFactory.canShowBulletin(ChatActivity.this)) {
+                            String text = newState ? "Telegram Fast-Lane: Active for this channel" : "Telegram Fast-Lane: Disabled for this channel";
+                            BulletinFactory.createSimpleBulletin(ChatActivity.this, text).show();
+                        }
+                    }
                 } else if (id == delete) {
                     if (getParentActivity() == null) {
                         return;
@@ -3388,6 +3399,9 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
             }
             headerItem = menu.addItem(chat_menu_options, R.drawable.ic_ab_other, themeDelegate);
             headerItem.setContentDescription(LocaleController.getString("AccDescrMoreOptions", R.string.AccDescrMoreOptions));
+            if (currentChat != null) {
+                headerItem.lazilyAddSubItem(chat_menu_fastlane, R.drawable.msg_settings_old, "Telegram Fast-Lane");
+            }
 
             if (currentUser == null || !currentUser.self) {
                 chatNotificationsPopupWrapper = new ChatNotificationsPopupWrapper(context, currentAccount, headerItem.getPopupLayout().getSwipeBack(), false, false, new ChatNotificationsPopupWrapper.Callback() {

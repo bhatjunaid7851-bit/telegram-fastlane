@@ -117,6 +117,7 @@
 
     <!-- AyuGram: remove for release `usesCleartextTraffic` -->
     <application
+        android:label="@string/AppName"
         android:name=".ApplicationLoader"
         android:allowAudioPlaybackCapture="true"
         android:allowBackup="true"
