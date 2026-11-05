@@ -44,16 +44,9 @@ jobs:
         run: |
           sdkmanager --install "platforms;android-33" "build-tools;33.0.1" "ndk;21.4.7075529" "cmake;3.22.1"
 
-      - name: Generate Self-Signed Release Keystore & API_KEYS
+      - name: Setup Release Keystore & API_KEYS
         run: |
-          mkdir -p TMessagesProj/config
           mkdir -p TMessagesProj/config/release
-          if [ ! -f TMessagesProj/config/extera.jks ]; then
-            keytool -genkeypair -v -keystore TMessagesProj/config/extera.jks \
-              -alias fastlane -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass fastlane -keypass fastlane \
-              -dname "CN=TelegramFastlane, OU=FastLane, O=TG, L=Singapore, S=SG, C=SG"
-          fi
           cp -f TMessagesProj/config/extera.jks TMessagesProj/config/release/release.jks
           
           cat > API_KEYS << 'EOF'
