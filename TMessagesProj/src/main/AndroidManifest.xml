@@ -117,7 +117,6 @@
 
     <!-- AyuGram: remove for release `usesCleartextTraffic` -->
     <application
-        android:label="@string/AppName"
         android:name=".ApplicationLoader"
         android:allowAudioPlaybackCapture="true"
         android:allowBackup="true"
@@ -133,7 +132,7 @@
         android:supportsRtl="false"
         android:theme="@style/Theme.TMessages.Start"
         android:usesCleartextTraffic="true"
-        tools:replace="android:supportsRtl,android:label">
+        tools:replace="android:supportsRtl">
         <meta-data
             android:name="com.google.android.maps.v2.API_KEY"
             android:value="@string/MAPS_V2_API" />
