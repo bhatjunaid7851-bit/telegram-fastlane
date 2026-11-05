@@ -46,39 +46,45 @@ jobs:
 
       - name: Generate Self-Signed Release Keystore & API_KEYS
         run: |
-          keytool -genkeypair -v -keystore TMessagesProj/config/release/release.jks \
+          mkdir -p TMessagesProj/config
+          mkdir -p TMessagesProj/config/release
+          rm -f TMessagesProj/config/extera.jks
+          rm -f TMessagesProj/config/release/release.jks
+          keytool -genkeypair -v -keystore TMessagesProj/config/extera.jks \
             -alias fastlane -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass fastlane -keypass fastlane \
             -dname "CN=TelegramFastlane, OU=FastLane, O=TG, L=Singapore, S=SG, C=SG"
+          cp -f TMessagesProj/config/extera.jks TMessagesProj/config/release/release.jks
           
           cat > API_KEYS << 'EOF'
-          APP_ID = 6
-          APP_HASH = "eb06d4abfb49dc3eeb1aeb98ae0f581e"
-          MAPS_V2_API = ""
-          SIGNING_KEY_PASSWORD = fastlane
-          SIGNING_KEY_ALIAS = fastlane
-          SIGNING_KEY_STORE_PASSWORD = fastlane
+          APP_ID=6
+          APP_HASH="eb06d4abfb49dc3eeb1aeb98ae0f581e"
+          MAPS_V2_API=""
+          SIGNING_KEY_PASSWORD=fastlane
+          SIGNING_KEY_ALIAS=fastlane
+          SIGNING_KEY_STORE_PASSWORD=fastlane
           EOF
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Arm64 & Afat Release APK
+      - name: Build Arm64 Release APK
         env:
-          GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m"
+          GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx6144m -XX:MaxMetaspaceSize=1024m" -Dorg.gradle.parallel=true -Dorg.gradle.workers.max=4
         run: |
-          ./gradlew assembleArm64Release assembleAfatRelease --no-daemon --stacktrace
+          ./gradlew assembleArm64Release --no-daemon --parallel --stacktrace
 
       - name: Publish Fast-Lane APK to GitHub Releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG_NAME="tg-fastlane-$(date +%s)"
-          ARM64_APK=$(find TMessagesProj/build/outputs/apk/arm64/release/ -name "*.apk" | head -n 1)
-          AFAT_APK=$(find TMessagesProj/build/outputs/apk/afat/release/ -name "*.apk" | head -n 1)
+          ARM64_APK=$(find TMessagesProj/build/outputs/apk/ -name "*arm64*release*.apk" -o -name "*arm64*.apk" | head -n 1)
+          if [ -z "$ARM64_APK" ]; then
+            ARM64_APK=$(find TMessagesProj/build/outputs/apk/ -name "*.apk" | head -n 1)
+          fi
           echo "Found Arm64 APK: $ARM64_APK"
-          echo "Found Afat APK: $AFAT_APK"
-          ls -lh $ARM64_APK $AFAT_APK
-          gh release create "$TAG_NAME" "$ARM64_APK" "$AFAT_APK" \
+          ls -lh "$ARM64_APK"
+          gh release create "$TAG_NAME" "$ARM64_APK" \
             --title "Telegram Fast-Lane ($TAG_NAME)" \
             --notes "Custom Official Telegram client for OnePlus 15R / Android 16 with sub-millisecond gift code extraction, auto-reactions, and instant IPC."
