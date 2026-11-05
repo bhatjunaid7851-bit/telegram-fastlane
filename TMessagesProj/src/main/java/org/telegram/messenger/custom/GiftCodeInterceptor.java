@@ -26,6 +26,8 @@ public class GiftCodeInterceptor {
     private static final String KEY_DISPATCH_MODE = "dispatch_mode";
     private static final String KEY_SERIES_INTERVAL = "series_interval_ms";
     private static final String KEY_AUTO_REACTION = "auto_reaction_enabled";
+    private static final String KEY_CONTINUOUS_REACTION = "continuous_reaction_enabled";
+    private static final String KEY_POLL_INTERVAL = "reaction_poll_interval_ms";
 
     private static final Pattern EXACT_32_PATTERN = Pattern.compile("\\b[A-Za-z0-9]{32}\\b");
     private static final Pattern FALLBACK_PATTERN = Pattern.compile("\\b[A-Za-z0-9]{16,31}\\b");
@@ -42,8 +44,10 @@ public class GiftCodeInterceptor {
     private static final Set<Long> TARGETED_CHANNELS = new HashSet<>();
     private static boolean masterEnabled = true;
     private static boolean autoReactionEnabled = true;
+    private static boolean continuousReactionEnabled = true;
     private static int dispatchMode = MODE_NORMAL;
     private static int seriesIntervalMs = 1000;
+    private static int pollIntervalMs = 1000;
     private static boolean prefsLoaded = false;
     private static String lastDispatchedCode = "";
 
@@ -54,8 +58,10 @@ public class GiftCodeInterceptor {
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             masterEnabled = prefs.getBoolean(KEY_MASTER_ENABLED, true);
             autoReactionEnabled = prefs.getBoolean(KEY_AUTO_REACTION, true);
+            continuousReactionEnabled = prefs.getBoolean(KEY_CONTINUOUS_REACTION, true);
             dispatchMode = prefs.getInt(KEY_DISPATCH_MODE, MODE_NORMAL);
             seriesIntervalMs = prefs.getInt(KEY_SERIES_INTERVAL, 1000);
+            pollIntervalMs = prefs.getInt(KEY_POLL_INTERVAL, 1000);
             Set<String> set = prefs.getStringSet(KEY_TARGETED_CHANNELS, null);
             if (set != null) {
                 TARGETED_CHANNELS.clear();
@@ -122,6 +128,34 @@ public class GiftCodeInterceptor {
         return seriesIntervalMs;
     }
 
+    public static synchronized void setContinuousReactionEnabled(boolean enabled) {
+        continuousReactionEnabled = enabled;
+        Context context = ApplicationLoader.applicationContext;
+        if (context != null) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                   .edit().putBoolean(KEY_CONTINUOUS_REACTION, enabled).apply();
+        }
+    }
+
+    public static synchronized boolean isContinuousReactionEnabled() {
+        ensurePrefsLoaded();
+        return continuousReactionEnabled;
+    }
+
+    public static synchronized void setPollIntervalMs(int ms) {
+        pollIntervalMs = Math.max(500, Math.min(2000, ms));
+        Context context = ApplicationLoader.applicationContext;
+        if (context != null) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                   .edit().putInt(KEY_POLL_INTERVAL, pollIntervalMs).apply();
+        }
+    }
+
+    public static synchronized int getPollIntervalMs() {
+        ensurePrefsLoaded();
+        return pollIntervalMs;
+    }
+
     public static synchronized void setAutoReactionEnabled(boolean enabled) {
         autoReactionEnabled = enabled;
         Context context = ApplicationLoader.applicationContext;
@@ -180,9 +214,9 @@ public class GiftCodeInterceptor {
         // 1. Channel/Group Whitelist Guard
         if (!isChannelTargeted(targetChatId) && !isChannelTargeted(Math.abs(dialogId))) return;
 
-        // 2. Auto-Reaction on incoming message
-        if (isAutoReactionEnabled() && msg.id > 0) {
-            AutoReactionController.getInstance(currentAccount).dispatchRandomAllowedReaction(dialogId, targetChatId, msg.id);
+        // 2. Seamlessly update latest message in continuous auto-reaction controller
+        if (msg.id > 0) {
+            AutoReactionController.getInstance(currentAccount).updateLatestMessage(dialogId, msg.id);
         }
 
         // 3. Zero OCR Media Bypass: skip photos, stickers, albums, voice notes if no text
@@ -220,7 +254,7 @@ public class GiftCodeInterceptor {
         List<String> codes = extractAllCodes(text);
         if (codes.isEmpty()) return;
 
-        // Ensure reaction is dispatched for captured gift code message
+        // Ensure reaction is dispatched immediately for captured gift code message
         AutoReactionController.getInstance(currentAccount).dispatchRandomAllowedReaction(dialogId, targetChatId, msgId);
 
         ensurePrefsLoaded();

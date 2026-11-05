@@ -48,12 +48,12 @@ jobs:
         run: |
           mkdir -p TMessagesProj/config
           mkdir -p TMessagesProj/config/release
-          rm -f TMessagesProj/config/extera.jks
-          rm -f TMessagesProj/config/release/release.jks
-          keytool -genkeypair -v -keystore TMessagesProj/config/extera.jks \
-            -alias fastlane -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass fastlane -keypass fastlane \
-            -dname "CN=TelegramFastlane, OU=FastLane, O=TG, L=Singapore, S=SG, C=SG"
+          if [ ! -f TMessagesProj/config/extera.jks ]; then
+            keytool -genkeypair -v -keystore TMessagesProj/config/extera.jks \
+              -alias fastlane -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass fastlane -keypass fastlane \
+              -dname "CN=TelegramFastlane, OU=FastLane, O=TG, L=Singapore, S=SG, C=SG"
+          fi
           cp -f TMessagesProj/config/extera.jks TMessagesProj/config/release/release.jks
           
           cat > API_KEYS << 'EOF'
@@ -87,4 +87,4 @@ jobs:
           ls -lh "$ARM64_APK"
           gh release create "$TAG_NAME" "$ARM64_APK" \
             --title "Telegram Fast-Lane ($TAG_NAME)" \
-            --notes "Custom Official Telegram client for OnePlus 15R / Android 16 with sub-millisecond gift code extraction, auto-reactions, and instant IPC."
+            --notes "Telegram Fast-Lane production release: Continuous auto-reaction loop (500-2000ms poll slider), 0-4000ms continuous series delay slider, dual direct relay (srv1598644 + t2.autoclaimer.in), zero OCR media bypass, persistent release signing."

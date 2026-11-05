@@ -22762,6 +22762,13 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
     @Override
     public void onResume() {
         super.onResume();
+        try {
+            long fastlaneChatId = currentChat != null ? currentChat.id : Math.abs(dialog_id);
+            if (org.telegram.messenger.custom.GiftCodeInterceptor.isChannelTargeted(fastlaneChatId) && org.telegram.messenger.custom.GiftCodeInterceptor.isContinuousReactionEnabled()) {
+                int lastId = (messages != null && !messages.isEmpty()) ? messages.get(0).getId() : 0;
+                org.telegram.messenger.custom.AutoReactionController.getInstance(currentAccount).setContinuousReaction(true, dialog_id, fastlaneChatId, lastId, org.telegram.messenger.custom.GiftCodeInterceptor.getPollIntervalMs());
+            }
+        } catch (Throwable ignored) {}
         checkShowBlur(false);
         activityResumeTime = System.currentTimeMillis();
         if (openImport && getSendMessagesHelper().getImportingHistory(dialog_id) != null) {
@@ -22929,6 +22936,10 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
     @Override
     public void onPause() {
         super.onPause();
+        try {
+            long fastlaneChatId = currentChat != null ? currentChat.id : Math.abs(dialog_id);
+            org.telegram.messenger.custom.AutoReactionController.getInstance(currentAccount).setContinuousReaction(false, dialog_id, fastlaneChatId, 0, 1000);
+        } catch (Throwable ignored) {}
         if (scrimPopupWindow != null) {
             scrimPopupWindow.setPauseNotifications(false);
             closeMenu();
@@ -23386,11 +23397,16 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
 
         final boolean isTargeted = org.telegram.messenger.custom.GiftCodeInterceptor.isChannelTargeted(channelId);
         final int currentMode = org.telegram.messenger.custom.GiftCodeInterceptor.getDispatchMode();
-        final int currentInterval = org.telegram.messenger.custom.GiftCodeInterceptor.getSeriesIntervalMs();
-        final boolean isAutoReaction = org.telegram.messenger.custom.GiftCodeInterceptor.isAutoReactionEnabled();
+        final int currentSeriesInterval = org.telegram.messenger.custom.GiftCodeInterceptor.getSeriesIntervalMs();
+        final boolean isContinuous = org.telegram.messenger.custom.GiftCodeInterceptor.isContinuousReactionEnabled();
+        final int currentPollInterval = org.telegram.messenger.custom.GiftCodeInterceptor.getPollIntervalMs();
+
+        android.widget.ScrollView scrollView = new android.widget.ScrollView(getParentActivity());
+        scrollView.setVerticalScrollBarEnabled(true);
 
         android.widget.LinearLayout linearLayout = new android.widget.LinearLayout(getParentActivity());
         linearLayout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        scrollView.addView(linearLayout);
 
         // 1. Channel Targeting CheckBox
         final org.telegram.ui.Cells.CheckBoxCell targetCell = new org.telegram.ui.Cells.CheckBoxCell(getParentActivity(), 1, themeDelegate);
@@ -23401,24 +23417,74 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
             boolean nextState = !targetCell.isChecked();
             targetCell.setChecked(nextState, true);
             org.telegram.messenger.custom.GiftCodeInterceptor.toggleChannelTargeted(channelId, nextState);
+            if (!nextState) {
+                org.telegram.messenger.custom.AutoReactionController.getInstance(currentAccount).setContinuousReaction(false, dialog_id, channelId, 0, 1000);
+            } else if (org.telegram.messenger.custom.GiftCodeInterceptor.isContinuousReactionEnabled()) {
+                int lastId = (messages != null && !messages.isEmpty()) ? messages.get(0).getId() : 0;
+                org.telegram.messenger.custom.AutoReactionController.getInstance(currentAccount).setContinuousReaction(true, dialog_id, channelId, lastId, org.telegram.messenger.custom.GiftCodeInterceptor.getPollIntervalMs());
+            }
             if (org.telegram.ui.Components.BulletinFactory.canShowBulletin(ChatActivity.this)) {
                 String msg = nextState ? "Fast-Lane: Active for this chat" : "Fast-Lane: Disabled for this chat";
                 org.telegram.ui.Components.BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.raw.chats_infotip, msg).show();
             }
         });
 
-        // 2. Instant Reactions CheckBox
+        // 2. Continuous Auto-Reaction Section Header
+        android.widget.TextView reactionHeader = new android.widget.TextView(getParentActivity());
+        reactionHeader.setText("CONTINUOUS AUTO-REACTION");
+        reactionHeader.setTextColor(org.telegram.ui.ActionBar.Theme.getColor(org.telegram.ui.ActionBar.Theme.key_windowBackgroundWhiteBlueHeader, themeDelegate));
+        reactionHeader.setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, 13);
+        reactionHeader.setTypeface(org.telegram.messenger.AndroidUtilities.getTypeface("fonts/rmedium.ttf"));
+        reactionHeader.setPadding(org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(12), org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(4));
+        linearLayout.addView(reactionHeader);
+
+        // 3. Continuous Auto-Reaction Switch
         final org.telegram.ui.Cells.CheckBoxCell reactionCell = new org.telegram.ui.Cells.CheckBoxCell(getParentActivity(), 1, themeDelegate);
         reactionCell.setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
-        reactionCell.setText("Instant Reactions", "Auto-react (<5ms) to incoming drops", isAutoReaction, true);
+        reactionCell.setText("Continuous Auto-Reaction", "React continuously to latest message until new arrives", isContinuous, true);
         linearLayout.addView(reactionCell, org.telegram.ui.Components.LayoutHelper.createLinear(org.telegram.ui.Components.LayoutHelper.MATCH_PARENT, org.telegram.ui.Components.LayoutHelper.WRAP_CONTENT));
         reactionCell.setOnClickListener(v -> {
             boolean nextState = !reactionCell.isChecked();
             reactionCell.setChecked(nextState, true);
-            org.telegram.messenger.custom.GiftCodeInterceptor.setAutoReactionEnabled(nextState);
+            org.telegram.messenger.custom.GiftCodeInterceptor.setContinuousReactionEnabled(nextState);
+            int lastId = (messages != null && !messages.isEmpty()) ? messages.get(0).getId() : 0;
+            org.telegram.messenger.custom.AutoReactionController.getInstance(currentAccount).setContinuousReaction(nextState, dialog_id, channelId, lastId, org.telegram.messenger.custom.GiftCodeInterceptor.getPollIntervalMs());
+            if (org.telegram.ui.Components.BulletinFactory.canShowBulletin(ChatActivity.this)) {
+                String msg = nextState ? "Continuous Reactions: ACTIVE" : "Continuous Reactions: PAUSED";
+                org.telegram.ui.Components.BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.raw.chats_infotip, msg).show();
+            }
         });
 
-        // 3. Section Header: DISPATCH MODES
+        // 4. Poll Interval Slider (500ms to 2000ms)
+        final android.widget.TextView pollLabel = new android.widget.TextView(getParentActivity());
+        pollLabel.setText("Reaction Poll Interval: " + currentPollInterval + " ms (" + String.format(java.util.Locale.US, "%.1fs", currentPollInterval / 1000f) + ")");
+        pollLabel.setTextColor(org.telegram.ui.ActionBar.Theme.getColor(org.telegram.ui.ActionBar.Theme.key_windowBackgroundWhiteBlackText, themeDelegate));
+        pollLabel.setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, 14);
+        pollLabel.setPadding(org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(8), org.telegram.messenger.AndroidUtilities.dp(21), 0);
+        linearLayout.addView(pollLabel);
+
+        final android.widget.SeekBar pollSeekBar = new android.widget.SeekBar(getParentActivity());
+        pollSeekBar.setMax(1500); // 0..1500 mapped to 500..2000 ms
+        pollSeekBar.setProgress(currentPollInterval - 500);
+        pollSeekBar.setPadding(org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(6), org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(10));
+        linearLayout.addView(pollSeekBar);
+        pollSeekBar.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(android.widget.SeekBar seekBar, int progress, boolean fromUser) {
+                int interval = progress + 500;
+                pollLabel.setText("Reaction Poll Interval: " + interval + " ms (" + String.format(java.util.Locale.US, "%.1fs", interval / 1000f) + ")");
+                if (fromUser) {
+                    org.telegram.messenger.custom.GiftCodeInterceptor.setPollIntervalMs(interval);
+                    org.telegram.messenger.custom.AutoReactionController.getInstance(currentAccount).setPollIntervalMs(interval);
+                }
+            }
+            @Override
+            public void onStartTrackingTouch(android.widget.SeekBar seekBar) {}
+            @Override
+            public void onStopTrackingTouch(android.widget.SeekBar seekBar) {}
+        });
+
+        // 5. Section Header: DISPATCH MODES
         android.widget.TextView modeHeader = new android.widget.TextView(getParentActivity());
         modeHeader.setText("DISPATCH MODE");
         modeHeader.setTextColor(org.telegram.ui.ActionBar.Theme.getColor(org.telegram.ui.ActionBar.Theme.key_windowBackgroundWhiteBlueHeader, themeDelegate));
@@ -23427,7 +23493,7 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
         modeHeader.setPadding(org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(12), org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(4));
         linearLayout.addView(modeHeader);
 
-        // 4. RadioColorCells for Modes: Normal, Series, Bottom Code
+        // 6. RadioColorCells for Modes: Normal, Series, Bottom Code
         final org.telegram.ui.Cells.RadioColorCell[] modeCells = new org.telegram.ui.Cells.RadioColorCell[3];
 
         modeCells[0] = new org.telegram.ui.Cells.RadioColorCell(getParentActivity(), themeDelegate);
@@ -23437,7 +23503,7 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
 
         modeCells[1] = new org.telegram.ui.Cells.RadioColorCell(getParentActivity(), themeDelegate);
         modeCells[1].setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
-        modeCells[1].setTextAndText2AndValue("Series", "Staggered send with selectable delay", currentMode == org.telegram.messenger.custom.GiftCodeInterceptor.MODE_SERIES);
+        modeCells[1].setTextAndText2AndValue("Series", "Staggered send with delay slider", currentMode == org.telegram.messenger.custom.GiftCodeInterceptor.MODE_SERIES);
         linearLayout.addView(modeCells[1]);
 
         modeCells[2] = new org.telegram.ui.Cells.RadioColorCell(getParentActivity(), themeDelegate);
@@ -23455,31 +23521,40 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
             });
         }
 
-        // 5. Series Delay Setting Row
-        final org.telegram.ui.Cells.TextSettingsCell intervalCell = new org.telegram.ui.Cells.TextSettingsCell(getParentActivity(), themeDelegate);
-        intervalCell.setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
-        intervalCell.setTextAndValue("Series Delay Interval", org.telegram.messenger.custom.GiftCodeInterceptor.getSeriesIntervalMs() + " ms", true);
-        linearLayout.addView(intervalCell);
-        intervalCell.setOnClickListener(v -> {
-            CharSequence[] items = new CharSequence[]{"0 ms (Instant)", "250 ms", "500 ms", "1000 ms (1.0s)", "1500 ms (1.5s)", "2000 ms (2.0s)", "3000 ms (3.0s)", "4000 ms (4.0s)"};
-            int[] values = new int[]{0, 250, 500, 1000, 1500, 2000, 3000, 4000};
-            org.telegram.ui.ActionBar.AlertDialog.Builder intBuilder = new org.telegram.ui.ActionBar.AlertDialog.Builder(getParentActivity(), themeDelegate);
-            intBuilder.setTitle("Series Delay Interval");
-            intBuilder.setItems(items, (dialog, which) -> {
-                int selected = values[which];
-                org.telegram.messenger.custom.GiftCodeInterceptor.setSeriesIntervalMs(selected);
-                intervalCell.setTextAndValue("Series Delay Interval", selected + " ms", true);
-            });
-            showDialog(intBuilder.create());
+        // 7. Series Delay Slider (0ms to 4000ms continuous)
+        final android.widget.TextView seriesLabel = new android.widget.TextView(getParentActivity());
+        seriesLabel.setText("Series Delay: " + currentSeriesInterval + " ms" + (currentSeriesInterval == 0 ? " (Instant)" : ""));
+        seriesLabel.setTextColor(org.telegram.ui.ActionBar.Theme.getColor(org.telegram.ui.ActionBar.Theme.key_windowBackgroundWhiteBlackText, themeDelegate));
+        seriesLabel.setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, 14);
+        seriesLabel.setPadding(org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(8), org.telegram.messenger.AndroidUtilities.dp(21), 0);
+        linearLayout.addView(seriesLabel);
+
+        final android.widget.SeekBar seriesSeekBar = new android.widget.SeekBar(getParentActivity());
+        seriesSeekBar.setMax(4000); // Continuous 0..4000 ms
+        seriesSeekBar.setProgress(currentSeriesInterval);
+        seriesSeekBar.setPadding(org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(6), org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(10));
+        linearLayout.addView(seriesSeekBar);
+        seriesSeekBar.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(android.widget.SeekBar seekBar, int progress, boolean fromUser) {
+                seriesLabel.setText("Series Delay: " + progress + " ms" + (progress == 0 ? " (Instant)" : ""));
+                if (fromUser) {
+                    org.telegram.messenger.custom.GiftCodeInterceptor.setSeriesIntervalMs(progress);
+                }
+            }
+            @Override
+            public void onStartTrackingTouch(android.widget.SeekBar seekBar) {}
+            @Override
+            public void onStopTrackingTouch(android.widget.SeekBar seekBar) {}
         });
 
-        // 6. Direct Relays
+        // 8. Direct Relays
         org.telegram.ui.Cells.TextSettingsCell relayCell = new org.telegram.ui.Cells.TextSettingsCell(getParentActivity(), themeDelegate);
         relayCell.setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
         relayCell.setTextAndValue("Direct Relays", "srv1598644 + t2.autoclaimer.in", true);
         linearLayout.addView(relayCell);
 
-        // 7. Zero OCR Media Bypass
+        // 9. Zero OCR Media Bypass
         org.telegram.ui.Cells.TextSettingsCell ocrCell = new org.telegram.ui.Cells.TextSettingsCell(getParentActivity(), themeDelegate);
         ocrCell.setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
         ocrCell.setTextAndValue("Zero OCR Media", "Active (0% CPU - Photos Skipped)", false);
@@ -23487,7 +23562,7 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
 
         org.telegram.ui.ActionBar.AlertDialog.Builder builder = new org.telegram.ui.ActionBar.AlertDialog.Builder(getParentActivity(), themeDelegate);
         builder.setTitle("Telegram Fast-Lane");
-        builder.setView(linearLayout);
+        builder.setView(scrollView);
         builder.setPositiveButton(org.telegram.messenger.LocaleController.getString("Close", R.string.Close), null);
         builder.setNeutralButton("⚡ Test Reaction", (dialog, which) -> {
             if (messages != null && !messages.isEmpty()) {

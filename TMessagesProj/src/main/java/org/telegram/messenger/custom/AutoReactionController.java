@@ -12,13 +12,16 @@ public class AutoReactionController {
     private static final Map<Integer, AutoReactionController> instances = new HashMap<>();
     private final int currentAccount;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private boolean isOneSecSwitchOn = false;
+
+    private boolean isContinuousEnabled = false;
     private long activeDialogId = 0;
     private long activeChatId = 0;
     private int latestMsgId = 0;
+    private int pollIntervalMs = 1000;
     private boolean inFloodWait = false;
     private WifiManager.WifiLock wifiLock = null;
     private final Random random = new Random();
+    private int lastEmojiIndex = -1;
 
     public static synchronized AutoReactionController getInstance(int account) {
         AutoReactionController instance = instances.get(account);
@@ -33,12 +36,16 @@ public class AutoReactionController {
         this.currentAccount = account;
     }
 
-    public synchronized void setOneSecSwitch(boolean enabled, long dialogId, long chatId) {
-        this.isOneSecSwitchOn = enabled;
+    public synchronized void setContinuousReaction(boolean enabled, long dialogId, long chatId, int initialMsgId, int intervalMs) {
+        this.isContinuousEnabled = enabled;
         this.activeDialogId = dialogId;
         this.activeChatId = chatId;
+        if (initialMsgId > 0) {
+            this.latestMsgId = initialMsgId;
+        }
+        this.pollIntervalMs = Math.max(500, Math.min(2000, intervalMs));
 
-        // Manage OnePlus 15R FastConnect Wi-Fi 7 Low-Latency Lock
+        // Manage Low-Latency Wi-Fi Lock
         Context context = ApplicationLoader.applicationContext;
         if (context != null) {
             try {
@@ -59,43 +66,54 @@ public class AutoReactionController {
             } catch (Exception ignored) {}
         }
 
-        if (enabled) {
-            startOneSecLoop();
-        } else {
-            handler.removeCallbacks(oneSecRunnable);
+        handler.removeCallbacks(continuousRunnable);
+        if (enabled && dialogId != 0) {
+            startContinuousLoop();
         }
     }
 
-    private final Runnable oneSecRunnable = new Runnable() {
+    public synchronized void setPollIntervalMs(int ms) {
+        this.pollIntervalMs = Math.max(500, Math.min(2000, ms));
+    }
+
+    private final Runnable continuousRunnable = new Runnable() {
         @Override
         public void run() {
-            if (!isOneSecSwitchOn || inFloodWait || activeDialogId == 0) return;
+            if (!isContinuousEnabled || inFloodWait || activeDialogId == 0) return;
 
             if (latestMsgId > 0) {
+                // Continuously react to latest available message until new message arrives
                 dispatchRandomAllowedReaction(activeDialogId, activeChatId, latestMsgId);
             }
 
             // Keep TCP cwnd pinned via non-mutating readHistory
             sendNonMutatingKeepAlive(activeDialogId, latestMsgId);
 
-            handler.postDelayed(this, 1000);
+            handler.postDelayed(this, Math.max(500, pollIntervalMs));
         }
     };
 
-    private void startOneSecLoop() {
-        handler.removeCallbacks(oneSecRunnable);
-        handler.post(oneSecRunnable);
+    private void startContinuousLoop() {
+        handler.removeCallbacks(continuousRunnable);
+        handler.post(continuousRunnable);
     }
 
-    public void updateLatestMessage(long dialogId, int msgId) {
-        if (dialogId == this.activeDialogId) {
-            this.latestMsgId = msgId;
+    public synchronized void updateLatestMessage(long dialogId, int newMsgId) {
+        if (dialogId == this.activeDialogId || dialogId == -this.activeChatId || Math.abs(dialogId) == Math.abs(this.activeChatId)) {
+            if (newMsgId > 0 && newMsgId != this.latestMsgId) {
+                this.latestMsgId = newMsgId;
+                FileLog.d("TelegramFastLane: Updated latest message to " + newMsgId + " in dialog " + dialogId);
+                // Immediately react on the newly arrived message
+                if (isContinuousEnabled && !inFloodWait) {
+                    dispatchRandomAllowedReaction(activeDialogId, activeChatId, newMsgId);
+                }
+            }
         }
     }
 
     public void dispatchRandomAllowedReaction(long dialogId, long targetChatId, int msgId) {
         if (inFloodWait || dialogId == 0 || msgId == 0) return;
-        
+
         long absId = Math.abs(targetChatId != 0 ? targetChatId : dialogId);
         if (!GiftCodeInterceptor.isChannelTargeted(absId) && !GiftCodeInterceptor.isChannelTargeted(targetChatId) && !GiftCodeInterceptor.isChannelTargeted(dialogId)) {
             return;
@@ -105,7 +123,10 @@ public class AutoReactionController {
         List<String> allowedEmojis = getPermittedEmojis(chatFull);
         if (allowedEmojis.isEmpty()) return;
 
-        String selectedEmoji = allowedEmojis.get(random.nextInt(allowedEmojis.size()));
+        // Cycle through emojis so each reaction pulse visibly renders
+        int nextIndex = (lastEmojiIndex + 1) % allowedEmojis.size();
+        lastEmojiIndex = nextIndex;
+        String selectedEmoji = allowedEmojis.get(nextIndex);
 
         TLRPC.TL_messages_sendReaction req = new TLRPC.TL_messages_sendReaction();
         TLRPC.InputPeer inputPeer = MessagesController.getInstance(currentAccount).getInputPeer(dialogId);
@@ -199,7 +220,7 @@ public class AutoReactionController {
             inFloodWait = true;
             handler.postDelayed(() -> {
                 inFloodWait = false;
-                if (isOneSecSwitchOn) startOneSecLoop();
+                if (isContinuousEnabled) startContinuousLoop();
             }, (seconds + 1) * 1000L);
         } catch (Exception ignored) {}
     }
