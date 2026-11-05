@@ -2980,7 +2980,7 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
                         org.telegram.messenger.custom.GiftCodeInterceptor.toggleChannelTargeted(channelId, newState);
                         if (BulletinFactory.canShowBulletin(ChatActivity.this)) {
                             String text = newState ? "Telegram Fast-Lane: Active for this channel" : "Telegram Fast-Lane: Disabled for this channel";
-                            BulletinFactory.createSimpleBulletin(ChatActivity.this, text).show();
+                            BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.raw.chats_infotip, text).show();
                         }
                     }
                 } else if (id == delete) {
