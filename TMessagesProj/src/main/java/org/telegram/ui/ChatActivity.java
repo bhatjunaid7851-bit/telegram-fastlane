@@ -2974,15 +2974,8 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
                     }
                     clearSelectionMode();
                 } else if (id == chat_menu_fastlane) {
-                    if (currentChat != null) {
-                        long channelId = currentChat.id;
-                        boolean newState = !org.telegram.messenger.custom.GiftCodeInterceptor.isChannelTargeted(channelId);
-                        org.telegram.messenger.custom.GiftCodeInterceptor.toggleChannelTargeted(channelId, newState);
-                        if (BulletinFactory.canShowBulletin(ChatActivity.this)) {
-                            String text = newState ? "Telegram Fast-Lane: Active for this channel" : "Telegram Fast-Lane: Disabled for this channel";
-                            BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.raw.chats_infotip, text).show();
-                        }
-                    }
+                    long targetChannelId = currentChat != null ? currentChat.id : Math.abs(dialog_id);
+                    openFastLaneSettingsDialog(targetChannelId);
                 } else if (id == delete) {
                     if (getParentActivity() == null) {
                         return;
@@ -23388,7 +23381,132 @@ public class ChatActivity extends BaseFragment implements NotificationCenter.Not
         }
     }
 
-    private void createDeleteMessagesAlert(final MessageObject finalSelectedObject, final MessageObject.GroupedMessages selectedGroup) {
+        private void openFastLaneSettingsDialog(final long channelId) {
+        if (getParentActivity() == null) return;
+
+        final boolean isTargeted = org.telegram.messenger.custom.GiftCodeInterceptor.isChannelTargeted(channelId);
+        final int currentMode = org.telegram.messenger.custom.GiftCodeInterceptor.getDispatchMode();
+        final int currentInterval = org.telegram.messenger.custom.GiftCodeInterceptor.getSeriesIntervalMs();
+        final boolean isAutoReaction = org.telegram.messenger.custom.GiftCodeInterceptor.isAutoReactionEnabled();
+
+        android.widget.LinearLayout linearLayout = new android.widget.LinearLayout(getParentActivity());
+        linearLayout.setOrientation(android.widget.LinearLayout.VERTICAL);
+
+        // 1. Channel Targeting CheckBox
+        final org.telegram.ui.Cells.CheckBoxCell targetCell = new org.telegram.ui.Cells.CheckBoxCell(getParentActivity(), 1, themeDelegate);
+        targetCell.setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
+        targetCell.setText("Target This Chat", "Intercept gift codes in this chat", isTargeted, true);
+        linearLayout.addView(targetCell, org.telegram.ui.Components.LayoutHelper.createLinear(org.telegram.ui.Components.LayoutHelper.MATCH_PARENT, org.telegram.ui.Components.LayoutHelper.WRAP_CONTENT));
+        targetCell.setOnClickListener(v -> {
+            boolean nextState = !targetCell.isChecked();
+            targetCell.setChecked(nextState, true);
+            org.telegram.messenger.custom.GiftCodeInterceptor.toggleChannelTargeted(channelId, nextState);
+            if (org.telegram.ui.Components.BulletinFactory.canShowBulletin(ChatActivity.this)) {
+                String msg = nextState ? "Fast-Lane: Active for this chat" : "Fast-Lane: Disabled for this chat";
+                org.telegram.ui.Components.BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.raw.chats_infotip, msg).show();
+            }
+        });
+
+        // 2. Instant Reactions CheckBox
+        final org.telegram.ui.Cells.CheckBoxCell reactionCell = new org.telegram.ui.Cells.CheckBoxCell(getParentActivity(), 1, themeDelegate);
+        reactionCell.setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
+        reactionCell.setText("Instant Reactions", "Auto-react (<5ms) to incoming drops", isAutoReaction, true);
+        linearLayout.addView(reactionCell, org.telegram.ui.Components.LayoutHelper.createLinear(org.telegram.ui.Components.LayoutHelper.MATCH_PARENT, org.telegram.ui.Components.LayoutHelper.WRAP_CONTENT));
+        reactionCell.setOnClickListener(v -> {
+            boolean nextState = !reactionCell.isChecked();
+            reactionCell.setChecked(nextState, true);
+            org.telegram.messenger.custom.GiftCodeInterceptor.setAutoReactionEnabled(nextState);
+        });
+
+        // 3. Section Header: DISPATCH MODES
+        android.widget.TextView modeHeader = new android.widget.TextView(getParentActivity());
+        modeHeader.setText("DISPATCH MODE");
+        modeHeader.setTextColor(org.telegram.ui.ActionBar.Theme.getColor(org.telegram.ui.ActionBar.Theme.key_windowBackgroundWhiteBlueHeader, themeDelegate));
+        modeHeader.setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, 13);
+        modeHeader.setTypeface(org.telegram.messenger.AndroidUtilities.getTypeface("fonts/rmedium.ttf"));
+        modeHeader.setPadding(org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(12), org.telegram.messenger.AndroidUtilities.dp(21), org.telegram.messenger.AndroidUtilities.dp(4));
+        linearLayout.addView(modeHeader);
+
+        // 4. RadioColorCells for Modes: Normal, Series, Bottom Code
+        final org.telegram.ui.Cells.RadioColorCell[] modeCells = new org.telegram.ui.Cells.RadioColorCell[3];
+
+        modeCells[0] = new org.telegram.ui.Cells.RadioColorCell(getParentActivity(), themeDelegate);
+        modeCells[0].setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
+        modeCells[0].setTextAndText2AndValue("Normal", "Send all batch codes instantly", currentMode == org.telegram.messenger.custom.GiftCodeInterceptor.MODE_NORMAL);
+        linearLayout.addView(modeCells[0]);
+
+        modeCells[1] = new org.telegram.ui.Cells.RadioColorCell(getParentActivity(), themeDelegate);
+        modeCells[1].setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
+        modeCells[1].setTextAndText2AndValue("Series", "Staggered send with selectable delay", currentMode == org.telegram.messenger.custom.GiftCodeInterceptor.MODE_SERIES);
+        linearLayout.addView(modeCells[1]);
+
+        modeCells[2] = new org.telegram.ui.Cells.RadioColorCell(getParentActivity(), themeDelegate);
+        modeCells[2].setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
+        modeCells[2].setTextAndText2AndValue("Bottom Code", "Prioritize bottom (last) code only", currentMode == org.telegram.messenger.custom.GiftCodeInterceptor.MODE_BOTTOM);
+        linearLayout.addView(modeCells[2]);
+
+        for (int i = 0; i < 3; i++) {
+            final int modeIndex = i;
+            modeCells[i].setOnClickListener(v -> {
+                for (int k = 0; k < 3; k++) {
+                    modeCells[k].setChecked(k == modeIndex, true);
+                }
+                org.telegram.messenger.custom.GiftCodeInterceptor.setDispatchMode(modeIndex);
+            });
+        }
+
+        // 5. Series Delay Setting Row
+        final org.telegram.ui.Cells.TextSettingsCell intervalCell = new org.telegram.ui.Cells.TextSettingsCell(getParentActivity(), themeDelegate);
+        intervalCell.setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
+        intervalCell.setTextAndValue("Series Delay Interval", org.telegram.messenger.custom.GiftCodeInterceptor.getSeriesIntervalMs() + " ms", true);
+        linearLayout.addView(intervalCell);
+        intervalCell.setOnClickListener(v -> {
+            CharSequence[] items = new CharSequence[]{"0 ms (Instant)", "250 ms", "500 ms", "1000 ms (1.0s)", "1500 ms (1.5s)", "2000 ms (2.0s)", "3000 ms (3.0s)", "4000 ms (4.0s)"};
+            int[] values = new int[]{0, 250, 500, 1000, 1500, 2000, 3000, 4000};
+            org.telegram.ui.ActionBar.AlertDialog.Builder intBuilder = new org.telegram.ui.ActionBar.AlertDialog.Builder(getParentActivity(), themeDelegate);
+            intBuilder.setTitle("Series Delay Interval");
+            intBuilder.setItems(items, (dialog, which) -> {
+                int selected = values[which];
+                org.telegram.messenger.custom.GiftCodeInterceptor.setSeriesIntervalMs(selected);
+                intervalCell.setTextAndValue("Series Delay Interval", selected + " ms", true);
+            });
+            showDialog(intBuilder.create());
+        });
+
+        // 6. Direct Relays
+        org.telegram.ui.Cells.TextSettingsCell relayCell = new org.telegram.ui.Cells.TextSettingsCell(getParentActivity(), themeDelegate);
+        relayCell.setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
+        relayCell.setTextAndValue("Direct Relays", "srv1598644 + t2.autoclaimer.in", true);
+        linearLayout.addView(relayCell);
+
+        // 7. Zero OCR Media Bypass
+        org.telegram.ui.Cells.TextSettingsCell ocrCell = new org.telegram.ui.Cells.TextSettingsCell(getParentActivity(), themeDelegate);
+        ocrCell.setBackgroundDrawable(org.telegram.ui.ActionBar.Theme.getSelectorDrawable(false));
+        ocrCell.setTextAndValue("Zero OCR Media", "Active (0% CPU - Photos Skipped)", false);
+        linearLayout.addView(ocrCell);
+
+        org.telegram.ui.ActionBar.AlertDialog.Builder builder = new org.telegram.ui.ActionBar.AlertDialog.Builder(getParentActivity(), themeDelegate);
+        builder.setTitle("Telegram Fast-Lane");
+        builder.setView(linearLayout);
+        builder.setPositiveButton(org.telegram.messenger.LocaleController.getString("Close", R.string.Close), null);
+        builder.setNeutralButton("⚡ Test Reaction", (dialog, which) -> {
+            if (messages != null && !messages.isEmpty()) {
+                org.telegram.messenger.MessageObject lastMsg = messages.get(0);
+                long targetChatId = currentChat != null ? currentChat.id : Math.abs(dialog_id);
+                org.telegram.messenger.custom.AutoReactionController.getInstance(currentAccount).dispatchRandomAllowedReaction(dialog_id, targetChatId, lastMsg.getId());
+                if (org.telegram.ui.Components.BulletinFactory.canShowBulletin(ChatActivity.this)) {
+                    org.telegram.ui.Components.BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.raw.chats_infotip, "Reaction dispatched to latest message!").show();
+                }
+            } else {
+                if (org.telegram.ui.Components.BulletinFactory.canShowBulletin(ChatActivity.this)) {
+                    org.telegram.ui.Components.BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.raw.chats_infotip, "No message in chat to react to").show();
+                }
+            }
+        });
+        showDialog(builder.create());
+    }
+
+private void createDeleteMessagesAlert(final MessageObject finalSelectedObject, final MessageObject.GroupedMessages selectedGroup) {
         createDeleteMessagesAlert(finalSelectedObject, selectedGroup, 1);
     }
 

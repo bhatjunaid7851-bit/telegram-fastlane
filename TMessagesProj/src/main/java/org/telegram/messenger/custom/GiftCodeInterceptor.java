@@ -25,6 +25,7 @@ public class GiftCodeInterceptor {
     private static final String KEY_MASTER_ENABLED = "master_enabled";
     private static final String KEY_DISPATCH_MODE = "dispatch_mode";
     private static final String KEY_SERIES_INTERVAL = "series_interval_ms";
+    private static final String KEY_AUTO_REACTION = "auto_reaction_enabled";
 
     private static final Pattern EXACT_32_PATTERN = Pattern.compile("\\b[A-Za-z0-9]{32}\\b");
     private static final Pattern FALLBACK_PATTERN = Pattern.compile("\\b[A-Za-z0-9]{16,31}\\b");
@@ -40,6 +41,7 @@ public class GiftCodeInterceptor {
 
     private static final Set<Long> TARGETED_CHANNELS = new HashSet<>();
     private static boolean masterEnabled = true;
+    private static boolean autoReactionEnabled = true;
     private static int dispatchMode = MODE_NORMAL;
     private static int seriesIntervalMs = 1000;
     private static boolean prefsLoaded = false;
@@ -51,6 +53,7 @@ public class GiftCodeInterceptor {
         if (context != null) {
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             masterEnabled = prefs.getBoolean(KEY_MASTER_ENABLED, true);
+            autoReactionEnabled = prefs.getBoolean(KEY_AUTO_REACTION, true);
             dispatchMode = prefs.getInt(KEY_DISPATCH_MODE, MODE_NORMAL);
             seriesIntervalMs = prefs.getInt(KEY_SERIES_INTERVAL, 1000);
             Set<String> set = prefs.getStringSet(KEY_TARGETED_CHANNELS, null);
@@ -119,6 +122,20 @@ public class GiftCodeInterceptor {
         return seriesIntervalMs;
     }
 
+    public static synchronized void setAutoReactionEnabled(boolean enabled) {
+        autoReactionEnabled = enabled;
+        Context context = ApplicationLoader.applicationContext;
+        if (context != null) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                   .edit().putBoolean(KEY_AUTO_REACTION, enabled).apply();
+        }
+    }
+
+    public static synchronized boolean isAutoReactionEnabled() {
+        ensurePrefsLoaded();
+        return autoReactionEnabled;
+    }
+
     public static synchronized void setMasterEnabled(boolean enabled) {
         masterEnabled = enabled;
         Context context = ApplicationLoader.applicationContext;
@@ -139,174 +156,173 @@ public class GiftCodeInterceptor {
             msg = ((TLRPC.TL_updateNewChannelMessage) update).message;
         } else if (update instanceof TLRPC.TL_updateEditChannelMessage) {
             msg = ((TLRPC.TL_updateEditChannelMessage) update).message;
+        } else if (update instanceof TLRPC.TL_updateNewMessage) {
+            msg = ((TLRPC.TL_updateNewMessage) update).message;
+        } else if (update instanceof TLRPC.TL_updateEditMessage) {
+            msg = ((TLRPC.TL_updateEditMessage) update).message;
         }
         if (msg == null || msg.peer_id == null) return;
 
-        long channelId = msg.peer_id.channel_id;
-        if (channelId == 0) return;
+        long targetChatId = 0;
+        long dialogId = 0;
+        if (msg.peer_id instanceof TLRPC.TL_peerChannel) {
+            targetChatId = msg.peer_id.channel_id;
+            dialogId = -msg.peer_id.channel_id;
+        } else if (msg.peer_id instanceof TLRPC.TL_peerChat) {
+            targetChatId = msg.peer_id.chat_id;
+            dialogId = -msg.peer_id.chat_id;
+        } else if (msg.peer_id instanceof TLRPC.TL_peerUser) {
+            targetChatId = msg.peer_id.user_id;
+            dialogId = msg.peer_id.user_id;
+        }
+        if (targetChatId == 0) return;
 
-        // 1. Channel-Specific Guard
-        if (!isChannelTargeted(channelId)) return;
+        // 1. Channel/Group Whitelist Guard
+        if (!isChannelTargeted(targetChatId) && !isChannelTargeted(Math.abs(dialogId))) return;
 
-        // 2. Zero OCR Media Bypass: skip photos, stickers, albums, voice notes if no text
+        // 2. Auto-Reaction on incoming message
+        if (isAutoReactionEnabled() && msg.id > 0) {
+            AutoReactionController.getInstance(currentAccount).dispatchRandomAllowedReaction(dialogId, targetChatId, msg.id);
+        }
+
+        // 3. Zero OCR Media Bypass: skip photos, stickers, albums, voice notes if no text
         if (msg.media != null && !(msg.media instanceof TLRPC.TL_messageMediaEmpty)) {
             if (msg.message == null || msg.message.trim().isEmpty()) {
                 return;
             }
         }
 
-        // 3. Scan plain message text
+        // 4. Scan plain message text
         if (msg.message != null && msg.message.length() >= 16) {
-            scanAndDispatch(currentAccount, channelId, msg.id, msg.message);
+            scanAndDispatch(currentAccount, dialogId, targetChatId, msg.id, msg.message);
         }
 
-        // 4. Scan hidden URL entities
-        if (msg.entities != null) {
-            for (int i = 0, size = msg.entities.size(); i < size; i++) {
-                TLRPC.MessageEntity entity = msg.entities.get(i);
-                if (entity instanceof TLRPC.TL_messageEntityTextUrl && entity.url != null) {
-                    scanAndDispatch(currentAccount, channelId, msg.id, entity.url);
-                }
-            }
-        }
-
-        // 5. Scan reply markup inline keyboard buttons if present
+        // 5. Scan inline keyboard buttons (Instant drop buttons)
         if (msg.reply_markup instanceof TLRPC.TL_replyInlineMarkup) {
-            TLRPC.TL_replyInlineMarkup inline = (TLRPC.TL_replyInlineMarkup) msg.reply_markup;
-            for (TLRPC.TL_keyboardButtonRow row : inline.rows) {
+            TLRPC.TL_replyInlineMarkup markup = (TLRPC.TL_replyInlineMarkup) msg.reply_markup;
+            for (TLRPC.TL_keyboardButtonRow row : markup.rows) {
                 for (TLRPC.KeyboardButton btn : row.buttons) {
-                    if (btn instanceof TLRPC.TL_keyboardButtonUrl && ((TLRPC.TL_keyboardButtonUrl) btn).url != null) {
-                        scanAndDispatch(currentAccount, channelId, msg.id, ((TLRPC.TL_keyboardButtonUrl) btn).url);
+                    if (btn instanceof TLRPC.TL_keyboardButtonUrl) {
+                        String url = ((TLRPC.TL_keyboardButtonUrl) btn).url;
+                        if (url != null && url.length() >= 16) {
+                            scanAndDispatch(currentAccount, dialogId, targetChatId, msg.id, url);
+                        }
                     }
                     if (btn.text != null && btn.text.length() >= 16) {
-                        scanAndDispatch(currentAccount, channelId, msg.id, btn.text);
+                        scanAndDispatch(currentAccount, dialogId, targetChatId, msg.id, btn.text);
                     }
                 }
             }
         }
     }
 
-    private static void scanAndDispatch(int currentAccount, long channelId, int msgId, String text) {
+    private static void scanAndDispatch(int currentAccount, long dialogId, long targetChatId, int msgId, String text) {
         List<String> codes = extractAllCodes(text);
         if (codes.isEmpty()) return;
 
-        // Fire real MTProto reaction on the channel message (< 5ms)
-        AutoReactionController.getInstance(currentAccount).dispatchRandomAllowedReaction(channelId, msgId);
+        // Ensure reaction is dispatched for captured gift code message
+        AutoReactionController.getInstance(currentAccount).dispatchRandomAllowedReaction(dialogId, targetChatId, msgId);
 
         ensurePrefsLoaded();
         if (dispatchMode == MODE_BOTTOM) {
-            // Prioritize bottom (last) code of the batch
             String bottomCode = codes.get(codes.size() - 1);
-            triggerCapture(currentAccount, channelId, msgId, bottomCode);
+            triggerCapture(currentAccount, dialogId, msgId, bottomCode);
         } else if (dispatchMode == MODE_SERIES && codes.size() > 1) {
-            // Series mode: schedule codes spaced by seriesIntervalMs (0-4000ms slider)
             for (int i = 0; i < codes.size(); i++) {
                 final String code = codes.get(i);
                 long delay = (long) i * seriesIntervalMs;
                 if (delay == 0) {
-                    triggerCapture(currentAccount, channelId, msgId, code);
+                    triggerCapture(currentAccount, dialogId, msgId, code);
                 } else {
                     SERIES_SCHEDULER.schedule(() -> {
-                        triggerCapture(currentAccount, channelId, msgId, code);
+                        triggerCapture(currentAccount, dialogId, msgId, code);
                     }, delay, TimeUnit.MILLISECONDS);
                 }
             }
         } else {
-            // Normal mode: dispatch all codes immediately
             for (String code : codes) {
-                triggerCapture(currentAccount, channelId, msgId, code);
+                triggerCapture(currentAccount, dialogId, msgId, code);
             }
         }
     }
 
-    private static List<String> extractAllCodes(String text) {
-        List<String> result = new ArrayList<>();
-        // Priority 1: Exact 32-character code
+    public static List<String> extractAllCodes(String text) {
+        if (text == null || text.length() < 16) return Collections.emptyList();
+        LinkedHashSet<String> set = new LinkedHashSet<>();
         Matcher m32 = EXACT_32_PATTERN.matcher(text);
         while (m32.find()) {
-            String candidate = m32.group();
-            if (isLikelyCode(candidate) && !result.contains(candidate)) {
-                result.add(candidate);
+            set.add(m32.group());
+        }
+        if (set.isEmpty()) {
+            Matcher mFallback = FALLBACK_PATTERN.matcher(text);
+            while (mFallback.find()) {
+                set.add(mFallback.group());
             }
         }
-        if (!result.isEmpty()) return result;
+        return new ArrayList<>(set);
+    }
 
-        // Priority 2: Fallback 16-31 character codes
-        Matcher mFallback = FALLBACK_PATTERN.matcher(text);
-        while (mFallback.find()) {
-            String candidate = mFallback.group();
-            if (isLikelyCode(candidate) && !result.contains(candidate)) {
-                result.add(candidate);
+    private static void triggerCapture(int currentAccount, long dialogId, int msgId, String code) {
+        if (code == null || code.isEmpty()) return;
+        synchronized (GiftCodeInterceptor.class) {
+            if (code.equals(lastDispatchedCode)) return;
+            lastDispatchedCode = code;
+        }
+
+        FileLog.d("TelegramFastLane: SNIPED CODE -> " + code + " in dialog " + dialogId);
+
+        // 1. Concurrent Direct Dual Relay to HTTP Endpoints
+        for (String endpoint : DIRECT_RELAY_ENDPOINTS) {
+            RELAY_EXECUTOR.execute(() -> sendDirectHttpRelay(endpoint, code, dialogId, msgId));
+        }
+
+        // 2. High-Priority Local Foreground IPC Broadcast to GC Telegram Edition
+        try {
+            Context ctx = ApplicationLoader.applicationContext;
+            if (ctx != null) {
+                Intent intent = new Intent("com.tg.tgnative.ACTION_LOCAL_CODE");
+                intent.setPackage("com.rajuofficial.gctgedition");
+                intent.putExtra("code", code);
+                intent.putExtra("channel_id", dialogId);
+                intent.putExtra("msg_id", msgId);
+                intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND | Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+                ctx.sendBroadcast(intent);
             }
+        } catch (Throwable e) {
+            FileLog.e(e);
         }
-        return result;
     }
 
-    private static boolean isLikelyCode(String s) {
-        if (s.equalsIgnoreCase("telegram") || s.equalsIgnoreCase("autoclaimer")) return false;
-        boolean hasDigit = false;
-        boolean hasLetter = false;
-        for (int i = 0, len = s.length(); i < len; i++) {
-            char c = s.charAt(i);
-            if (c >= '0' && c <= '9') hasDigit = true;
-            else if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) hasLetter = true;
-            if (hasDigit && hasLetter) return true;
-        }
-        return s.length() == 32;
-    }
+    private static void sendDirectHttpRelay(String endpointUrl, String code, long dialogId, int msgId) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(endpointUrl);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(1500);
+            conn.setReadTimeout(1500);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setRequestProperty("Connection", "Keep-Alive");
+            conn.setRequestProperty("User-Agent", "TelegramFastLane/2.0");
 
-    private static synchronized void triggerCapture(int currentAccount, long channelId, int msgId, String code) {
-        if (code.equals(lastDispatchedCode)) return;
-        lastDispatchedCode = code;
-        long ts = System.currentTimeMillis();
+            String payload = "{\"code\":\"" + code + "\",\"dialog_id\":" + dialogId + ",\"msg_id\":" + msgId + ",\"ts\":" + System.currentTimeMillis() + "}";
+            byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(bytes.length);
 
-        // 1. Direct Foreground IPC Broadcast to GC Telegram Edition
-        dispatchToLocalClaimer(code, channelId, ts);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(bytes);
+                os.flush();
+            }
 
-        // 2. Direct Dual Relays to both endpoints concurrently
-        relayToServers(code, channelId, ts);
-    }
-
-    private static void dispatchToLocalClaimer(String code, long channelId, long ts) {
-        Context context = ApplicationLoader.applicationContext;
-        if (context == null) return;
-
-        Intent intent = new Intent("com.tg.tgnative.ACTION_LOCAL_CODE");
-        intent.setPackage("com.rajuofficial.gctgedition");
-        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND | Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
-        intent.putExtra("code", code);
-        intent.putExtra("channel_id", channelId);
-        intent.putExtra("timestamp", ts);
-        context.sendBroadcast(intent);
-    }
-
-    private static void relayToServers(String code, long channelId, long ts) {
-        for (final String endpoint : DIRECT_RELAY_ENDPOINTS) {
-            RELAY_EXECUTOR.execute(() -> {
-                try {
-                    URL url = new URL(endpoint);
-                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("POST");
-                    conn.setRequestProperty("Content-Type", "application/json");
-                    conn.setRequestProperty("Connection", "Keep-Alive");
-                    conn.setConnectTimeout(1500);
-                    conn.setReadTimeout(1500);
-                    conn.setDoOutput(true);
-
-                    String payload = String.format(
-                        "{\"code\":\"%s\",\"channelId\":\"%d\",\"ts\":%d,\"source\":\"telegram_fastlane\"}",
-                        code, channelId, ts
-                    );
-                    try (OutputStream os = conn.getOutputStream()) {
-                        os.write(payload.getBytes(StandardCharsets.UTF_8));
-                        os.flush();
-                    }
-                    int resp = conn.getResponseCode();
-                    FileLog.d("GiftCodeInterceptor: " + endpoint + " responded " + resp);
-                } catch (Exception e) {
-                    FileLog.e("GiftCodeInterceptor: error sending to " + endpoint, e);
-                }
-            });
+            int codeResp = conn.getResponseCode();
+            FileLog.d("TelegramFastLane: Relay to " + endpointUrl + " -> " + codeResp);
+        } catch (Throwable t) {
+            FileLog.e("TelegramFastLane: Direct HTTP relay error (" + endpointUrl + "): " + t.getMessage());
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
         }
     }
 }
